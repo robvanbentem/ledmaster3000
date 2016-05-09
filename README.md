@@ -1,4 +1,5 @@
-=== LEDMASTER3000
+LEDMASTER3000
+=============
 
 Simple "wave pattern" generator for the ESP8266 using a WS2812 ledstrip. Needs esp-open-sdk and Sming to compile:
 
