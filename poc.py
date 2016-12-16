@@ -2,10 +2,10 @@
 
 import math, time
 
-NUM_LEDS = 16
+NUM_LEDS = 17
 
 steps = {}
-size = 4
+size = 5
 pos = -4
 maxint = 100
 direction = 1
