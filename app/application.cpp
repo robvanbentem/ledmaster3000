@@ -5,13 +5,14 @@
 #include "user_interface.h"
 #include "ets_sys.h"
 
-#define LED_DEBUG 1
+#define LED_DEBUG 0
 
 #define LED_PIN 14
-#define LED_NUM 32
+#define LED_NUM 44
 #define LED_TOTAL LED_NUM * 3
 
 Timer procTimer;
+Timer waveTimer;
 
 struct wave {
     uint8_t enabled = 0;
@@ -24,7 +25,15 @@ struct wave {
     uint8_t blue = 0; // max brightness of the wave
     uint32_t counter = 0;
     uint8_t repeat = 1;
-    uint8_t countdown = 10;
+
+    float fade_speed = 0.0f;
+    float fade_position = 10;
+    int8_t fade_direction = 0; // -1 is fade in, 1 is fade out
+    float fade_duration = 10;
+
+    uint64_t life = 0;
+    uint64_t max_life = 0;
+    uint8_t dead = 0;
 } waves[2];
 
 char leds[LED_TOTAL];
@@ -36,15 +45,21 @@ void clear_leds(char leds[], int pos) {
 }
 
 
-void reset_wave() {
+void reset() {
     waves[0].enabled = 1;
-    waves[0].pos = 22;
+    waves[0].pos = 10;
     waves[0].size = 8;
     waves[0].direction = 1;
-    waves[0].speed = 100;
-    waves[0].red = 32;
+    waves[0].speed = 10;
+    waves[0].blue = 64;
     waves[0].repeat = 0;
-    waves[0].countdown = 10;
+    waves[0].fade_speed = 1;
+    waves[0].fade_direction = -1;
+    waves[0].fade_position = 5;
+    waves[0].fade_duration = 5;
+    waves[0].life = 0;
+    waves[0].max_life = 10;
+    waves[0].dead = 0;
 }
 
 void run_wave() {
@@ -53,7 +68,7 @@ void run_wave() {
 
     wave wv;
     int waveleds, wavepos, n, midmax, dirpos;
-    float midstep;
+    float midstep, ff, cc;
 
     memset(&leds, 0, sizeof(leds));
 
@@ -62,55 +77,81 @@ void run_wave() {
 
         waveleds = 2 * waves[w].size + 1;
 
-        for (n = 0; n < LED_NUM; n++) {
-            if (n > waves[w].pos)
-                wavepos = abs(n - (waves[w].pos - waves[w].size));
-            else
-                wavepos = n - (waves[w].pos - waves[w].size);
+        if (!waves[w].dead) {
+            if (waves[w].fade_speed != 0.0f) {
+                cc = ((float) waves[w].counter / (float)waves[w].speed) * fabs(waves[w].fade_speed) * waves[w].fade_direction;
+                //Serial.printf("CC: ((%.2f / %.2f) * %.2f) * %d = %.2f\n", (float)waves[w].counter, (float)waves[w].speed, fabs(waves[w].fade), waves[w].fade_direction, cc);
+                ff = waves[w].fade_position > 0 ? 1.0f - (waves[w].fade_position + cc) / (float)waves[w].fade_duration : 1.0f;
+            } else {
+                ff = 1.0f;
+            }
 
-            if (wavepos < 0 || n > (waves[w].pos + waves[w].size) || wavepos >= waveleds)
-                continue;
+            Serial.printf("cc:%.2f ff:%.2f\n", cc, ff);
+            //Serial.printf("FF: 1 - (%.2f-%.2f) / %.2f = %.2f\n", waves[w].fade_position, cc, waves[w].fade_duration, ff);
 
-            midmax = (waveleds * waves[w].speed);
+            for (n = 0; n < LED_NUM; n++) {
+                if (n > waves[w].pos)
+                    wavepos = abs(n - (waves[w].pos - waves[w].size));
+                else
+                    wavepos = n - (waves[w].pos - waves[w].size);
 
-            midstep = (wavepos * waves[w].speed) + (waves[w].speed - waves[w].counter);
+                if (wavepos < 0 || n > (waves[w].pos + waves[w].size) || wavepos >= waveleds)
+                    continue;
 
-            dirpos = waves[w].direction == 1 ? n * 3 : LED_TOTAL - ((n + 1) * 3);
+                midmax = (waveleds * waves[w].speed);
+                midstep = (wavepos * waves[w].speed) + (waves[w].speed - waves[w].counter);
 
-            //Serial.printf("FF: %.2f", (midstep / midmax));
+                dirpos = waves[w].direction == 1 ? n * 3 : LED_TOTAL - ((n + 1) * 3);
 
-            // fade in a new wave
-            //float ff = waves[w].countdown > 1 ? (waves[w].countdown - (midstep / midmax)) : 1.0f;
-
-            float f = sin(midstep * (PI / midmax)); // / ff;
-            leds[dirpos] += f * waves[w].red;
-            leds[dirpos + 1] += f * waves[w].green;
-            leds[dirpos + 2] += f * waves[w].blue;
+                float f = sin(midstep * (PI / midmax)) * ff;
+                leds[dirpos] += f * waves[w].red;
+                leds[dirpos + 1] += f * waves[w].green;
+                leds[dirpos + 2] += f * waves[w].blue;
+            }
         }
 
         waves[w].counter++;
         if (waves[w].counter == waves[w].speed) {
             waves[w].counter = 0;
+            waves[w].life++;
+            if (waves[w].fade_speed != 0) {
+                waves[w].fade_position += (float)(waves[w].fade_speed * waves[w].fade_direction);
+
+                if (waves[w].fade_position <= 0.0f || waves[w].fade_position >= waves[w].fade_duration) {
+                    waves[w].fade_speed = 0.0f;
+                    if (waves[w].life > waves[w].max_life) {
+                        waves[w].dead = 1;
+                    }
+                }
+            }
+
+            if (waves[w].life == waves[w].max_life) {
+                waves[w].fade_speed = 0.5f;
+                waves[w].fade_direction = 1;
+            }
+
             waves[w].pos = waves[w].pos + 1;
 
-            if (waves[w].countdown > 1) {
-                waves[w].countdown--;
+            if (waves[w].pos - waves[w].size >= LED_NUM) {
+                if (!waves[w].repeat) {
+                    waves[w].enabled = 0;
+                    reset();
+                    continue;
+                }
+
+                waves[w].direction = -waves[w].direction;
+                waves[w].pos = -waves[w].size;
             }
         }
 
-        if (waves[w].pos - waves[w].size >= LED_NUM) {
-            if (!waves[w].repeat) {
-                waves[w].enabled = 0;
-                reset_wave();
-                continue;
-            }
-
-            waves[w].direction = -waves[w].direction;
-            waves[w].pos = -waves[w].size;
-        }
     }
 
-    Serial.printf(".");
+    //Serial.printf("----\n");
+
+
+    REG_SET_BIT(0x3ff00014, BIT(1));
+    system_update_cpu_freq(80);
+    ws2812_writergb(LED_PIN, leds, sizeof(leds));
 
     if (LED_DEBUG) {
         Serial.printf("\r\n");
@@ -120,22 +161,17 @@ void run_wave() {
         }
     }
 
-    REG_SET_BIT(0x3ff00014, BIT(1));
-    system_update_cpu_freq(80);
-    ws2812_writergb(LED_PIN, leds, sizeof(leds));
-
-
-    procTimer.start(false);
+    waveTimer.start(false);
 }
 
 void start_strip() {
-    Serial.printf("STARTING WAVE WHOOHOO!!");
-    procTimer.initializeMs(1, run_wave).start(false);
+    Serial.printf("Starting waveTimer\n");
+    waveTimer.initializeMs(100, run_wave).start(false);
 }
 
 void init() {
 
-    Serial.begin(SERIAL_BAUD_RATE); // 115200 by default
+    Serial.begin(921600); // 115200 by default
     Serial.systemDebugOutput(true); // Debug output to serial
     WifiStation.enable(false, true);
 
@@ -151,14 +187,7 @@ void init() {
     pinMode(13, OUTPUT);
     digitalWrite(13, 0);
 
-    waves[0].enabled = 1;
-    waves[0].pos = 22;
-    waves[0].size = 8;
-    waves[0].direction = 1;
-    waves[0].speed = 100;
-    waves[0].red = 32;
-    waves[0].repeat = 0;
-    waves[0].countdown = 10;
+    reset();
 
 /*    waves[1].enabled = 1;
       waves[1].pos = 6;
@@ -203,5 +232,6 @@ void init() {
     REG_SET_BIT(0x3ff00014, BIT(0));
     system_update_cpu_freq(160);
 
+    Serial.printf("Starting procTimer\n");
     procTimer.initializeMs(1000, start_strip).start(false);
 }
