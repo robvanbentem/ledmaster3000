@@ -8,7 +8,7 @@
 #define LED_DEBUG 0
 
 #define LED_PIN 14
-#define LED_NUM 44
+#define LED_NUM 22
 #define LED_TOTAL LED_NUM * 3
 
 Timer procTimer;
@@ -27,9 +27,10 @@ struct wave {
     uint8_t repeat = 1;
 
     float fade_speed = 0.0f;
-    float fade_position = 10;
+    float fade_position = 0;
     int8_t fade_direction = 0; // -1 is fade in, 1 is fade out
-    float fade_duration = 10;
+    uint8_t fade_ends = 0;
+    uint8_t faded = 0;
 
     uint64_t life = 0;
     uint64_t max_life = 0;
@@ -46,20 +47,19 @@ void clear_leds(char leds[], int pos) {
 
 
 void reset() {
-    waves[0].enabled = 1;
+    waves[0].enabled = 0;
     waves[0].pos = 10;
-    waves[0].size = 8;
+    waves[0].size = 2;
     waves[0].direction = 1;
-    waves[0].speed = 10;
-    waves[0].blue = 64;
+    waves[0].speed = 32;
+    waves[0].blue = 192;
     waves[0].repeat = 0;
-    waves[0].fade_speed = 1;
-    waves[0].fade_direction = -1;
-    waves[0].fade_position = 5;
-    waves[0].fade_duration = 5;
+    waves[0].fade_speed = 0.15f;
+    waves[0].fade_direction = 1;
+    waves[0].fade_position = 0;
     waves[0].life = 0;
-    waves[0].max_life = 10;
-    waves[0].dead = 0;
+    waves[0].max_life = 6;
+    waves[0].dead = 1;
 }
 
 void run_wave() {
@@ -68,7 +68,7 @@ void run_wave() {
 
     wave wv;
     int waveleds, wavepos, n, midmax, dirpos;
-    float midstep, ff, cc;
+    float midstep, ff, cc, base;
 
     memset(&leds, 0, sizeof(leds));
 
@@ -77,11 +77,17 @@ void run_wave() {
 
         waveleds = 2 * waves[w].size + 1;
 
-        if (!waves[w].dead) {
+        if (!waves[w].dead && !waves[w].faded) {
             if (waves[w].fade_speed != 0.0f) {
-                cc = ((float) waves[w].counter / (float)waves[w].speed) * fabs(waves[w].fade_speed) * waves[w].fade_direction;
+                cc = ((float) waves[w].counter / (float) waves[w].speed) * fabs(waves[w].fade_speed);
+                if (waves[w].fade_direction == 1) {
+                    ff = ((waves[w].fade_position + cc) / 1.0f);
+                } else {
+                    ff = 1.0f - ((waves[w].fade_position + cc) / 1.0f);
+                }
+
                 //Serial.printf("CC: ((%.2f / %.2f) * %.2f) * %d = %.2f\n", (float)waves[w].counter, (float)waves[w].speed, fabs(waves[w].fade), waves[w].fade_direction, cc);
-                ff = waves[w].fade_position > 0 ? 1.0f - (waves[w].fade_position + cc) / (float)waves[w].fade_duration : 1.0f;
+
             } else {
                 ff = 1.0f;
             }
@@ -114,33 +120,59 @@ void run_wave() {
         if (waves[w].counter == waves[w].speed) {
             waves[w].counter = 0;
             waves[w].life++;
-            if (waves[w].fade_speed != 0) {
-                waves[w].fade_position += (float)(waves[w].fade_speed * waves[w].fade_direction);
 
-                if (waves[w].fade_position <= 0.0f || waves[w].fade_position >= waves[w].fade_duration) {
+            if (waves[w].dead) continue;
+
+            if (waves[w].fade_speed != 0) {
+                waves[w].fade_position += (float) (waves[w].fade_speed);
+
+                if (waves[w].fade_position >= 1.0f) {
+                    if (waves[w].fade_direction == -1) {
+                        waves[w].faded = 1;
+                    }
+
                     waves[w].fade_speed = 0.0f;
-                    if (waves[w].life > waves[w].max_life) {
+                    waves[w].fade_direction = 0;
+                    waves[w].fade_position = 0;
+
+                    if (waves[w].max_life && waves[w].life > waves[w].max_life) {
                         waves[w].dead = 1;
                     }
                 }
             }
 
-            if (waves[w].life == waves[w].max_life) {
-                waves[w].fade_speed = 0.5f;
-                waves[w].fade_direction = 1;
+            if (waves[w].max_life && waves[w].life == waves[w].max_life) {
+                waves[w].fade_speed = 0.1f;
+                waves[w].fade_direction = -1;
+
+                if (waves[w].fade_position != 0.0f) {
+                    waves[w].fade_position = 1.0f - waves[w].fade_position;
+                }
             }
 
             waves[w].pos = waves[w].pos + 1;
 
+            if (waves[w].fade_ends && waves[w].fade_direction == 0 && waves[w].faded == 0) {
+                if (waves[w].pos + waves[w].size == LED_NUM) {
+                    waves[w].fade_speed = 1.0f / (waves[w].size * 2 - 1);
+                    waves[w].fade_direction = -1;
+                }
+            }
+
             if (waves[w].pos - waves[w].size >= LED_NUM) {
                 if (!waves[w].repeat) {
-                    waves[w].enabled = 0;
-                    reset();
+                    waves[w].dead = 1;
                     continue;
                 }
 
                 waves[w].direction = -waves[w].direction;
                 waves[w].pos = -waves[w].size;
+
+                if (waves[w].fade_ends && waves[w].fade_direction == 0 && waves[w].faded == 1) {
+                    waves[w].fade_speed = 1.0f / (waves[w].size * 2);
+                    waves[w].fade_direction = 1;
+                    waves[w].faded = 0;
+                }
             }
         }
 
@@ -166,7 +198,7 @@ void run_wave() {
 
 void start_strip() {
     Serial.printf("Starting waveTimer\n");
-    waveTimer.initializeMs(100, run_wave).start(false);
+    waveTimer.initializeMs(1, run_wave).start(false);
 }
 
 void init() {
@@ -186,6 +218,18 @@ void init() {
     digitalWrite(12, 0);
     pinMode(13, OUTPUT);
     digitalWrite(13, 0);
+
+    waves[1].enabled = 1;
+    waves[1].pos = 0;
+    waves[1].size = 6;
+    waves[1].direction = 1;
+    waves[1].speed = 75;
+    waves[1].red = 64;
+    waves[1].repeat = 1;
+    waves[1].fade_speed = 0.1f;
+    waves[1].fade_direction = 1;
+    waves[1].fade_position = 0;
+    waves[1].fade_ends = 1;
 
     reset();
 
