@@ -45,6 +45,15 @@ void clear_leds(char leds[], int pos) {
     memset(&leds[pos * 3], 0, sizeof(char) * 3);
 }
 
+void oc(char on) {
+    if (on) {
+        REG_SET_BIT(0x3ff00014, BIT(0));
+        system_update_cpu_freq(160);
+    } else {
+        REG_SET_BIT(0x3ff00014, BIT(1));
+        system_update_cpu_freq(80);
+    }
+}
 
 void reset() {
     waves[0].enabled = 0;
@@ -63,12 +72,11 @@ void reset() {
 }
 
 void run_wave() {
-    REG_SET_BIT(0x3ff00014, BIT(0));
-    system_update_cpu_freq(160);
+    oc(1);
 
     wave wv;
     int waveleds, wavepos, n, midmax, dirpos;
-    float midstep, ff, cc, base;
+    float midstep, fade_factor;
 
     memset(&leds, 0, sizeof(leds));
 
@@ -79,21 +87,14 @@ void run_wave() {
 
         if (!waves[w].dead && !waves[w].faded) {
             if (waves[w].fade_speed != 0.0f) {
-                cc = ((float) waves[w].counter / (float) waves[w].speed) * fabs(waves[w].fade_speed);
-                if (waves[w].fade_direction == 1) {
-                    ff = ((waves[w].fade_position + cc) / 1.0f);
-                } else {
-                    ff = 1.0f - ((waves[w].fade_position + cc) / 1.0f);
+                fade_factor = (waves[w].fade_position +
+                               ((float) waves[w].counter / (float) waves[w].speed) * fabs(waves[w].fade_speed)) / 1.0f;
+                if (waves[w].fade_direction == -1) {
+                    fade_factor = 1.0f - fade_factor;
                 }
-
-                //Serial.printf("CC: ((%.2f / %.2f) * %.2f) * %d = %.2f\n", (float)waves[w].counter, (float)waves[w].speed, fabs(waves[w].fade), waves[w].fade_direction, cc);
-
             } else {
-                ff = 1.0f;
+                fade_factor = 1.0f;
             }
-
-            Serial.printf("cc:%.2f ff:%.2f\n", cc, ff);
-            //Serial.printf("FF: 1 - (%.2f-%.2f) / %.2f = %.2f\n", waves[w].fade_position, cc, waves[w].fade_duration, ff);
 
             for (n = 0; n < LED_NUM; n++) {
                 if (n > waves[w].pos)
@@ -109,10 +110,10 @@ void run_wave() {
 
                 dirpos = waves[w].direction == 1 ? n * 3 : LED_TOTAL - ((n + 1) * 3);
 
-                float f = sin(midstep * (PI / midmax)) * ff;
-                leds[dirpos] += f * waves[w].red;
-                leds[dirpos + 1] += f * waves[w].green;
-                leds[dirpos + 2] += f * waves[w].blue;
+                float factor = sin(midstep * (PI / midmax)) * fade_factor;
+                leds[dirpos] += factor * waves[w].red;
+                leds[dirpos + 1] += factor * waves[w].green;
+                leds[dirpos + 2] += factor * waves[w].blue;
             }
         }
 
@@ -152,7 +153,7 @@ void run_wave() {
 
             waves[w].pos = waves[w].pos + 1;
 
-            if (waves[w].fade_ends && waves[w].fade_direction == 0 && waves[w].faded == 0) {
+            if (waves[w].fade_ends && waves[w].fade_direction == 0) {
                 if (waves[w].pos + waves[w].size == LED_NUM) {
                     waves[w].fade_speed = 1.0f / (waves[w].size * 2 - 1);
                     waves[w].fade_direction = -1;
@@ -178,12 +179,10 @@ void run_wave() {
 
     }
 
-    //Serial.printf("----\n");
 
-
-    REG_SET_BIT(0x3ff00014, BIT(1));
-    system_update_cpu_freq(80);
+    oc(0);
     ws2812_writergb(LED_PIN, leds, sizeof(leds));
+    oc(1);
 
     if (LED_DEBUG) {
         Serial.printf("\r\n");
@@ -198,7 +197,7 @@ void run_wave() {
 
 void start_strip() {
     Serial.printf("Starting waveTimer\n");
-    waveTimer.initializeMs(1, run_wave).start(false);
+    waveTimer.initializeUs(10, run_wave).start(false);
 }
 
 void init() {
@@ -273,8 +272,7 @@ void init() {
 
     //Serial.printf("Set CPU CLK: %u MHz\n", ets_get_cpu_frequency());
 
-    REG_SET_BIT(0x3ff00014, BIT(0));
-    system_update_cpu_freq(160);
+    oc(1);
 
     Serial.printf("Starting procTimer\n");
     procTimer.initializeMs(1000, start_strip).start(false);
